@@ -3,13 +3,11 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from sklearn.linear_model import LinearRegression
-from sklearn.preprocessing import PolynomialFeatures
-from sklearn.pipeline import make_pipeline
-from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
-st.set_page_config(page_title="서울 기온 다항회귀 분석", page_icon="📈", layout="wide")
+st.set_page_config(page_title="서울 기온 선형회귀 평가", page_icon="📈", layout="wide")
 
-st.title("📈 서울 연평균기온 다항회귀(1차·3차·9차) 모델 비교")
+st.title("📈 서울 연평균기온 선형회귀 모델 평가 및 학습 기간별 비교")
 
 @st.cache_data
 def load_data():
@@ -37,88 +35,92 @@ def load_data():
 
 yearly_df = load_data()
 
-# 1. 훈련용 / 테스트용 데이터 분할 (2005년 기준)
-train_df = yearly_df[yearly_df['연도'] < 2005].copy()
-test_df = yearly_df[yearly_df['연도'] >= 2005].copy()
+# 데이터 분할
+train_50 = yearly_df[(yearly_df['연도'] >= 1956) & (yearly_df['연도'] <= 2005)]
+train_100 = yearly_df[(yearly_df['연도'] >= 1906) & (yearly_df['연도'] <= 2005)]
+test_20 = yearly_df[(yearly_df['연도'] >= 2006) & (yearly_df['연도'] <= 2025)]
 
-# 데이터 개수 화면 출력
-st.subheader("📌 1. 데이터 분할 정보")
-col_tr, col_te = st.columns(2)
-col_tr.metric("훈련용 데이터 개수 (2005년 이전)", f"{len(train_df)}개 연도", f"{train_df['연도'].min()} ~ {train_df['연도'].max()}")
-col_te.metric("테스트용 데이터 개수 (2005년 이후)", f"{len(test_df)}개 연도", f"{test_df['연도'].min()} ~ {test_df['연도'].max()}")
-
-# 2. 연도 스케일링 (수치 안정성을 위해 연도 차이값 사용)
-base_year = train_df['연도'].min()
-X_train = (train_df[['연도']].values - base_year) / 100.0
-y_train = train_df['연평균기온'].values
-
-X_test = (test_df[['연도']].values - base_year) / 100.0
-y_test = test_df['연평균기온'].values
-
-X_2050 = np.array([[(2050 - base_year) / 100.0]])
-
-# 3. 모델 학습 및 테스트 데이터 평가
-degrees = [1, 3, 9]
-results = []
-models = {}
-
-for deg in degrees:
-    model = make_pipeline(PolynomialFeatures(degree=deg), LinearRegression())
+def evaluate_model(X_train, y_train, X_test, y_test):
+    model = LinearRegression()
     model.fit(X_train, y_train)
-    models[deg] = model
+    y_pred = model.predict(X_test)
     
-    # 테스트 데이터 예측 및 오차 평가
-    y_pred_test = model.predict(X_test)
-    pred_2050 = model.predict(X_2050)[0]
+    slope = model.coef_[0]
+    mae = mean_absolute_error(y_test, y_pred)
+    mse = mean_squared_error(y_test, y_pred)
+    r2 = r2_score(y_test, y_pred)
     
-    mae = mean_absolute_error(y_test, y_pred_test)
-    rmse = np.sqrt(mean_squared_error(y_test, y_pred_test))
-    
-    results.append({
-        "차수": f"{deg}차 모델",
-        "테스트 오차 (MAE)": f"{mae:.2f} °C",
-        "테스트 오차 (RMSE)": f"{rmse:.2f} °C",
-        "2050년 예상 기온": f"{pred_2050:.2f} °C"
-    })
+    return model, slope, mae, mse, r2
+
+# 1. 전체 데이터 모델
+X_all, y_all = yearly_df[['연도']].values, yearly_df['연평균기온'].values
+m_all, slope_all, mae_all, mse_all, r2_all = evaluate_model(X_all, y_all, X_all, y_all)
+
+# 2. 최근 50년 학습 -> 테스트 20년
+X_tr50, y_tr50 = train_50[['연도']].values, train_50['연평균기온'].values
+X_te20, y_te20 = test_20[['연도']].values, test_20['연평균기온'].values
+m_50, slope_50, mae_50, mse_50, r2_50 = evaluate_model(X_tr50, y_tr50, X_te20, y_te20)
+
+# 3. 최근 100년 학습 -> 테스트 20년
+X_tr100, y_tr100 = train_100[['연도']].values, train_100['연평균기온'].values
+m_100, slope_100, mae_100, mse_100, r2_100 = evaluate_model(X_tr100, y_tr100, X_te20, y_te20)
+
+# UI 영역
+st.subheader("📌 1. 전체 데이터 기준 선형회귀 모델")
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("회귀선 기울기", f"{slope_all:+.5f} °C/년")
+c2.metric("MAE", f"{mae_all:.4f}")
+c3.metric("MSE", f"{mse_all:.4f}")
+c4.metric("R²", f"{r2_all:.4f}")
 
 st.divider()
-st.subheader("📊 2. 차수별 테스트 성능 및 2050년 예측 비교표")
-st.table(pd.DataFrame(results))
 
-# 4. 시각화 그래프
+st.subheader("📊 2. 공통 테스트 데이터(2006~2025년) 예측 성능 비교")
+st.write(f"- **최근 50년 훈련 데이터:** {len(train_50)}개 연도 (1956~2005)")
+st.write(f"- **최근 100년 훈련 데이터:** {len(train_100)}개 연도 (1906~2005)")
+st.write(f"- **공통 테스트 데이터:** {len(test_20)}개 연도 (2006~2025)")
+
+comp_df = pd.DataFrame({
+    "학습 기간": ["최근 50년 학습 (1956~2005)", "최근 100년 학습 (1906~2005)"],
+    "회귀선 기울기 (°C/년)": [f"{slope_50:+.5f}", f"{slope_100:+.5f}"],
+    "MAE (낮을수록 우수)": [f"{mae_50:.4f}", f"{mae_100:.4f}"],
+    "MSE (낮을수록 우수)": [f"{mse_50:.4f}", f"{mse_100:.4f}"],
+    "R² (높을수록 우수)": [f"{r2_50:.4f}", f"{r2_100:.4f}"]
+})
+st.table(comp_df)
+
 st.divider()
-st.subheader("📉 3. 회귀 곡선 및 2050년 예측 시각화")
 
+st.subheader("📉 3. 학습 기간별 회귀선 비교 그래프")
 fig = go.Figure()
 
-# 실제 데이터 점 표시
 fig.add_trace(go.Scatter(
-    x=train_df['연도'], y=train_df['연평균기온'],
-    mode='markers', name='훈련 데이터 (< 2005)', marker=dict(color='blue', opacity=0.6, size=6)
-))
-fig.add_trace(go.Scatter(
-    x=test_df['연도'], y=test_df['연평균기온'],
-    mode='markers', name='테스트 데이터 (≥ 2005)', marker=dict(color='red', size=8)
+    x=yearly_df['연도'], y=yearly_df['연평균기온'],
+    mode='markers', name='전체 실제 데이터', marker=dict(color='gray', size=6, opacity=0.5)
 ))
 
-# 1908년~2050년까지의 예측 라인 생성
-plot_years = np.linspace(train_df['연도'].min(), 2050, 300).reshape(-1, 1)
-plot_X = (plot_years - base_year) / 100.0
+fig.add_trace(go.Scatter(
+    x=test_20['연도'], y=test_20['연평균기온'],
+    mode='markers', name='테스트 데이터 (2006~2025)', marker=dict(color='red', size=8)
+))
 
-colors = {1: 'green', 3: 'orange', 9: 'purple'}
-for deg in degrees:
-    pred_y = models[deg].predict(plot_X)
-    fig.add_trace(go.Scatter(
-        x=plot_years.flatten(), y=pred_y,
-        mode='lines', name=f'{deg}차 곡선 모델', line=dict(color=colors[deg], width=2)
-    ))
+x_r50 = np.arange(1956, 2026).reshape(-1, 1)
+fig.add_trace(go.Scatter(
+    x=x_r50.flatten(), y=m_50.predict(x_r50),
+    mode='lines', name=f'50년 학습 회귀선 ({slope_50:+.4f}°C/년)', line=dict(color='blue', width=3)
+))
+
+x_r100 = np.arange(1906, 2026).reshape(-1, 1)
+fig.add_trace(go.Scatter(
+    x=x_r100.flatten(), y=m_100.predict(x_r100),
+    mode='lines', name=f'100년 학습 회귀선 ({slope_100:+.4f}°C/년)', line=dict(color='green', width=3, dash='dash')
+))
 
 fig.update_layout(
     xaxis_title="연도",
     yaxis_title="연평균기온 (°C)",
-    yaxis=dict(range=[5, 25]),
     template="plotly_white",
-    height=550
+    height=500
 )
 
 st.plotly_chart(fig, use_container_width=True)
