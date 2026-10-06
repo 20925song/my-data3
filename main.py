@@ -59,4 +59,3 @@ m_all, slope_all, mae_all, mse_all, r2_all = evaluate_model(X_all, y_all, X_all,
 # 2. 최근 50년 학습 (1956~2005) -> 테스트 (2006~2025)
 X_tr50, y_tr50 = train_50[['연도']].values, train_50['연평균기온'].values
 X_te20, y_te20 = test_20[['연도']].values, test_20['연평균기온'].values
-m_
