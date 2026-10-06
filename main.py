@@ -1,18 +1,24 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
+import plotly.express as px
 import plotly.graph_objects as go
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+import numpy as np
 
-st.set_page_config(page_title="서울 기온 선형회귀 모델 분석", page_icon="📈", layout="wide")
+# 페이지 설정
+st.set_page_config(
+    page_title="서울 100년 기온 변화 분석",
+    page_icon="🌡️",
+    layout="wide"
+)
 
-st.title("📈 서울 연평균 기온 선형회귀 모델 평가 및 비교")
+# 제목 및 설명
+st.title("🌡️ 서울 100년 연평균 기온 변화 분석")
 st.markdown("""
-서울의 연평균 기온 데이터를 학습하여 선형회귀 모델을 생성하고,  
-**1) 전체 데이터 평가**, **2) 과거 50년/100년 학습 데이터에 따른 최근 20년(2006~2025) 예측 성능**을 비교합니다.
+지난 100여 년간 서울의 연평균 기온 상승 추이를 한눈에 확인할 수 있는 대시보드입니다.  
+* **데이터 출처:** 기상청 기후자료 (`seoul.csv`)
 """)
 
+# 데이터 로드 함수 (캐싱 적용)
 @st.cache_data
 def load_data():
     url = "https://raw.githubusercontent.com/greatsong/modudata/main/data/seoul.csv"
@@ -21,104 +27,152 @@ def load_data():
     except Exception:
         df = pd.read_csv(url, encoding='utf-8')
     
+    # 열 이름 공백 및 특수문자 정제
     df.columns = df.columns.str.strip()
-    col_map = {col: '날짜' if '날짜' in col else '평균기온' if '평균기온' in col else col for col in df.columns}
+    
+    col_map = {}
+    for col in df.columns:
+        if '날짜' in col:
+            col_map[col] = '날짜'
+        elif '평균기온' in col:
+            col_map[col] = '평균기온'
+        elif '최저기온' in col:
+            col_map[col] = '최저기온'
+        elif '최고기온' in col:
+            col_map[col] = '최고기온'
+    
     df = df.rename(columns=col_map)
     
+    # 날짜 및 기온 데이터 정제
     df['날짜'] = pd.to_datetime(df['날짜'].astype(str).str.strip(), errors='coerce')
     df = df.dropna(subset=['날짜'])
     df['연도'] = df['날짜'].dt.year
-    df['평균기온'] = pd.to_numeric(df['평균기온'], errors='coerce')
     
-    # 300일 이상 존재하는 정상 연도만 추출
-    valid_years = df.groupby('연도')['평균기온'].count()
-    valid_years = valid_years[valid_years >= 300].index
+    for col in ['평균기온', '최저기온', '최고기온']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
     
-    yearly_df = df[df['연도'].isin(valid_years)].groupby('연도')['평균기온'].mean().reset_index()
-    yearly_df.columns = ['연도', '연평균기온']
-    return yearly_df
+    return df
 
-yearly_df = load_data()
+with st.spinner("데이터를 불러오는 중입니다..."):
+    raw_df = load_data()
 
-# Data Partitioning
-train_50 = yearly_df[(yearly_df['연도'] >= 1956) & (yearly_df['연도'] <= 2005)]
-train_100 = yearly_df[(yearly_df['연도'] >= 1906) & (yearly_df['연도'] <= 2005)]
-test_20 = yearly_df[(yearly_df['연도'] >= 2006) & (yearly_df['연도'] <= 2025)]
+# 연도별 집계 (데이터가 300일 이상 존재하는 연도만 집계)
+valid_years = raw_df.groupby('연도')['평균기온'].count()
+valid_years = valid_years[valid_years >= 300].index
 
-# Helper function
-def run_linear_regression(X_train, y_train, X_test, y_test):
-    model = LinearRegression()
-    model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
-    
-    slope = model.coef_[0]
-    intercept = model.intercept_
-    mae = mean_absolute_error(y_test, y_pred)
-    mse = mean_squared_error(y_test, y_pred)
-    r2 = r2_score(y_test, y_pred)
-    
-    return model, slope, intercept, y_pred, mae, mse, r2
+yearly_df = raw_df[raw_df['연도'].isin(valid_years)].groupby('연도').agg(
+    연평균기온=('평균기온', 'mean'),
+    연최저기온평균=('최저기온', 'mean'),
+    연최고기온평균=('최고기온', 'mean')
+).reset_index()
 
-# 1. 전체 데이터 모델
-X_all = yearly_df[['연도']].values
-y_all = yearly_df['연평균기온'].values
-m_all, slope_all, intercept_all, y_pred_all, mae_all, mse_all, r2_all = run_linear_regression(X_all, y_all, X_all, y_all)
+# 사이드바 설정
+st.sidebar.header("⚙️ 분석 옵션")
 
-# 2. 최근 50년 학습 (1956~2005) -> 테스트 (2006~2025)
-X_tr50, y_tr50 = train_50[['연도']].values, train_50['연평균기온'].values
-X_te20, y_te20 = test_20[['연도']].values, test_20['연평균기온'].values
-m_50, slope_50, intercept_50, y_pred_50, mae_50, mse_50, r2_50 = run_linear_regression(X_tr50, y_tr50, X_te20, y_te20)
+min_year = int(yearly_df['연도'].min())
+max_year = int(yearly_df['연도'].max())
 
-# 3. 최근 100년 학습 (1906~2005) -> 테스트 (2006~2025)
-X_tr100, y_tr100 = train_100[['연도']].values, train_100['연평균기온'].values
-m_100, slope_100, intercept_100, y_pred_100, mae_100, mse_100, r2_100 = run_linear_regression(X_tr100, y_tr100, X_te20, y_te20)
+year_range = st.sidebar.slider(
+    "조회 연도 범위",
+    min_value=min_year,
+    max_value=max_year,
+    value=(min_year, max_year)
+)
 
-# Section 1: 전체 데이터 모델 성능
-st.subheader("1️⃣ 전체 데이터 기준 선형회귀 모델")
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("기울기 (Slope)", f"{slope_all:+.5f} °C/년")
-c2.metric("MAE (평균 절대 오차)", f"{mae_all:.4f}")
-c3.metric("MSE (평균 제곱 오차)", f"{mse_all:.4f}")
-c4.metric("R² (결정계수)", f"{r2_all:.4f}")
+show_trendline = st.sidebar.checkbox("장기 추세선 (선형 회귀)", value=True)
+show_ma = st.sidebar.checkbox("10년 이동평균선", value=True)
 
-# Section 2: 모델 비교 (50년 학습 vs 100년 학습)
-st.subheader("2️⃣ 공통 테스트 데이터(2006~2025) 예측 성능 비교")
+# 필터링 및 이동평균 계산
+filtered_df = yearly_df[(yearly_df['연도'] >= year_range[0]) & (yearly_df['연도'] <= year_range[1])].copy()
+filtered_df['10년이동평균'] = filtered_df['연평균기온'].rolling(window=10, min_periods=1).mean()
 
-comp_df = pd.DataFrame({
-    "구분": ["최근 50년 학습 (1956~2005)", "최근 100년 학습 (1906~2005)"],
-    "회귀선 기울기 (°C/년)": [f"{slope_50:+.5f}", f"{slope_100:+.5f}"],
-    "MAE (낮을수록 우수)": [f"{mae_50:.4f}", f"{mae_100:.4f}"],
-    "MSE (낮을수록 우수)": [f"{mse_50:.4f}", f"{mse_100:.4f}"],
-    "R² (높을수록 우수)": [f"{r2_50:.4f}", f"{r2_100:.4f}"]
-})
-st.table(comp_df)
+# 주요 지표 카드
+col1, col2, col3, col4 = st.columns(4)
 
-# Section 3: 시각화
-st.subheader("📉 회귀선 비교 시각화")
+highest_row = filtered_df.loc[filtered_df['연평균기온'].idxmax()]
+lowest_row = filtered_df.loc[filtered_df['연평균기온'].idxmin()]
+temp_change = filtered_df['연평균기온'].iloc[-1] - filtered_df['연평균기온'].iloc[0]
+
+with col1:
+    st.metric("최고 연평균 기온", f"{highest_row['연평균기온']:.1f} °C", f"{int(highest_row['연도'])}년")
+with col2:
+    st.metric("최저 연평균 기온", f"{lowest_row['연평균기온']:.1f} °C", f"{int(lowest_row['연도'])}년")
+with col3:
+    st.metric("선택 기간 평균", f"{filtered_df['연평균기온'].mean():.1f} °C")
+with col4:
+    st.metric("기간 내 총 기온 변화", f"{temp_change:+.1f} °C")
+
+# 시각화 그래프
+st.subheader("📈 연도별 서울 평균 기온 변화")
 
 fig = go.Figure()
 
-# 실제 데이터 점
+# 연평균 기온 그래프
 fig.add_trace(go.Scatter(
-    x=yearly_df['연도'], y=yearly_df['연평균기온'],
-    mode='markers', name='실제 연평균기온',
-    marker=dict(color='gray', size=6, opacity=0.6)
+    x=filtered_df['연도'],
+    y=filtered_df['연평균기온'],
+    mode='lines+markers',
+    name='연평균 기온',
+    line=dict(color='#E74C3C', width=2),
+    marker=dict(size=4),
+    hovertemplate='<b>%{x}년</b><br>평균 기온: %{y:.2f} °C<extra></extra>'
 ))
 
-# 테스트 데이터 점 강조
-fig.add_trace(go.Scatter(
-    x=test_20['연도'], y=test_20['연평균기온'],
-    mode='markers', name='테스트 데이터 (2006~2025)',
-    marker=dict(color='red', size=8)
-))
+# 10년 이동평균선
+if show_ma:
+    fig.add_trace(go.Scatter(
+        x=filtered_df['연도'],
+        y=filtered_df['10년이동평균'],
+        mode='lines',
+        name='10년 이동평균',
+        line=dict(color='#2980B9', width=3, dash='dash'),
+        hovertemplate='<b>%{x}년 (10년 이동평균)</b><br>기온: %{y:.2f} °C<extra></extra>'
+    ))
 
-# 50년 모델 예측선
-x_range_50 = np.arange(1956, 2026).reshape(-1, 1)
-fig.add_trace(go.Scatter(
-    x=x_range_50.flatten(), y=m_50.predict(x_range_50),
-    mode='lines', name=f'50년 학습 회귀선 (기울기: {slope_50:+.4f})',
-    line=dict(color='blue', width=3)
-))
+# 장기 추세선
+if show_trendline and len(filtered_df) > 1:
+    z = np.polyfit(filtered_df['연도'], filtered_df['연평균기온'], 1)
+    p = np.poly1d(z)
+    
+    fig.add_trace(go.Scatter(
+        x=filtered_df['연도'],
+        y=p(filtered_df['연도']),
+        mode='lines',
+        name='장기 추세선',
+        line=dict(color='#27AE60', width=2, dash='dot'),
+        hovertemplate='추세값: %{y:.2f} °C<extra></extra>'
+    ))
 
-# 100년 모델 예측선
-x_range_1
+fig.update_layout(
+    xaxis_title="연도",
+    yaxis_title="기온 (°C)",
+    hovermode="x unified",
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    template="plotly_white",
+    height=500
+)
+
+st.plotly_chart(fig, use_container_width=True)
+
+# 데이터 상세 보기
+st.subheader("📋 상세 데이터")
+tab1, tab2 = st.tabs(["데이터 테이블", "통계 요약"])
+
+with tab1:
+    st.dataframe(
+        filtered_df[['연도', '연평균기온', '연최저기온평균', '연최고기온평균']]
+        .style.format({'연평균기온': '{:.2f}', '연최저기온평균': '{:.2f}', '연최고기온평균': '{:.2f}'}),
+        use_container_width=True
+    )
+
+with tab2:
+    st.write(
+        filtered_df[['연평균기온', '연최저기온평균', '연최고기온평균']]
+        .describe()
+        .rename(columns={
+            '연평균기온': '연평균 기온(°C)',
+            '연최저기온평균': '연최저 기온 평균(°C)',
+            '연최고기온평균': '연최고 기온 평균(°C)'
+        })
+    )
